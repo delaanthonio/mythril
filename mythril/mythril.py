@@ -5,33 +5,34 @@
    http://www.github.com/b-mueller/mythril
 """
 
-import logging
+import configparser
 import json
+import logging
 import os
+import platform
 import re
 
+import solc
 from ethereum import utils
 from solc.exceptions import SolcError
-import solc
 
+from mythril.analysis.callgraph import generate_graph
+from mythril.analysis.report import Report
+from mythril.analysis.security import fire_lasers
+from mythril.analysis.symbolic import SymExecWrapper
+from mythril.analysis.traceexplore import get_serializable_statespace
 from mythril.ether import util
-from mythril.ether.contractstorage import get_persistent_storage
 from mythril.ether.ethcontract import ETHContract
 from mythril.ether.soliditycontract import SolidityContract
-from mythril.rpc.client import EthJsonRpc
+from mythril.exceptions import (CompilerError, CriticalError,
+                                NoContractFoundError)
 from mythril.ipc.client import EthIpc
+from mythril.leveldb.client import EthLevelDB
+from mythril.rpc.client import EthJsonRpc
 from mythril.rpc.exceptions import ConnectionError
 from mythril.support import signatures
-from mythril.support.truffle import analyze_truffle_project
 from mythril.support.loader import DynLoader
-from mythril.exceptions import CompilerError, NoContractFoundError, CriticalError
-from mythril.analysis.symbolic import SymExecWrapper
-from mythril.analysis.callgraph import generate_graph
-from mythril.analysis.traceexplore import get_serializable_statespace
-from mythril.analysis.security import fire_lasers
-from mythril.analysis.report import Report
-from mythril.leveldb.client import EthLevelDB
-
+from mythril.support.truffle import analyze_truffle_project
 
 # logging.basicConfig(level=logging.DEBUG)
 
@@ -101,11 +102,24 @@ class Mythril(object):
         except KeyError:
             mythril_dir = os.path.join(os.path.expanduser('~'), ".mythril")
 
-            # Initialize data directory and signature database
+        # Initialize data directory and signature database
 
         if not os.path.exists(mythril_dir):
             logging.info("Creating mythril data directory")
             os.mkdir(mythril_dir)
+            system = platform.system()
+            user = os.path.expanduser('~')
+            if system == "Darwin":
+                leveldb_path = os.path.join(user, "Library", "Ethereum", "geth", "chaindata")
+            elif system == "Windows":
+                leveldb_path = os.path.join(user, "AppData", "Roaming", "Ethereum", "geth", "chaindata")
+            else:
+                leveldb_path = os.path.join(user, ".ethereum", "geth", "chaindata")
+            config = configparser.ConfigParser()
+            config['DEFAULT'] = {'leveldb': leveldb_path}
+            config_path = os.path.join(mythril_dir, "mythril.cfg")
+            with open(config_path, "w") as file:
+                config.write(file)
         return mythril_dir
 
     def _init_signatures(self):
@@ -168,7 +182,16 @@ class Mythril(object):
                 solc_binary = 'solc'
         return solc_binary
 
-    def set_db_leveldb(self, leveldb):
+    def set_db_leveldb(self, leveldb=None):
+        if not leveldb:
+            config = configparser.ConfigParser()
+            config_path = os.path.join(self.mythril_dir, "mythril.cfg")
+            config.read(config_path)
+            leveldb = config['DEFAULT']['leveldb']
+        if not os.path.exists(leveldb):
+            raise FileNotFoundError("Invalid leveldb path: " + leveldb + " does not exist")
+        elif not os.path.isdir(leveldb):
+            raise NotADirectoryError("Invalid leveldb path: " + leveldb + " is not a directory")
         self.ethDb = EthLevelDB(leveldb)
         self.eth = self.ethDb
         self.dbtype = "leveldb"
@@ -214,31 +237,19 @@ class Mythril(object):
         self.dbtype = "rpc"
         logging.info("Using default RPC settings: http://localhost:8545")
 
-    def search_db(self, search):
+    def search_db(self, expression):
 
         def search_callback(code_hash, code, addresses, balances):
             print("Matched contract with code hash " + code_hash)
-            for i in range(0, len(addresses)):
-                print("Address: " + addresses[i] + ", balance: " + str(balances[i]))
+            for address, balance in zip(addresses, balances):
+                print("Address: {}, Balance: {}".format(address, balance))
 
         try:
-              if self.dbtype=="leveldb":
-                  self.ethDb.search(search, search_callback)
-              else:     
-                  contract_storage, _ = get_persistent_storage(self.mythril_dir)
-                  contract_storage.search(search, search_callback)
+            self.ethDb.search(expression, search_callback)
 
         except SyntaxError:
             raise CriticalError("Syntax error in search expression.")
 
-    def init_db(self):
-        contract_storage, _ = get_persistent_storage(self.mythril_dir)
-        try:
-            contract_storage.initialize(self.eth)
-        except FileNotFoundError as e:
-             raise CriticalError("Error syncing database over IPC: " + str(e))
-        except ConnectionError as e:
-            raise CriticalError("Could not connect to RPC server. Make sure that your node is running and that RPC parameters are set correctly.")
 
     def load_from_bytecode(self, code):
         address = util.get_indexed_address(0)

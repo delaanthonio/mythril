@@ -305,7 +305,6 @@ setup(
 
     install_requires=[
         'ethereum>=2.3.0',
-        'ZODB>=5.3.0',
         'z3-solver>=4.5',
         'requests',
         'BTrees',

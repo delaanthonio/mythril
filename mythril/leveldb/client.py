@@ -1,12 +1,13 @@
-import plyvel
 import binascii
-import rlp
 import hashlib
+
+import rlp
 from ethereum import utils
-from ethereum.block import BlockHeader, Block
-from mythril.leveldb.state import State, Account
-from mythril.leveldb.eth_db import ETH_DB
+from ethereum.block import Block, BlockHeader
+
 from mythril.ether.ethcontract import ETHContract, InstanceList
+from mythril.leveldb.eth_db import ETH_DB
+from mythril.leveldb.state import State
 
 # Per https://github.com/ethereum/go-ethereum/blob/master/core/database_util.go
 # prefixes and suffixes for keys in geth
@@ -23,11 +24,13 @@ def _formatBlockNumber(number):
     '''
     return utils.zpad(utils.int_to_big_endian(number), 8)
 
+
 def _encode_hex(v):
     '''
     encodes hash as hex
     '''
     return '0x' + utils.encode_hex(v)
+
 
 class EthLevelDB(object):
     '''
@@ -39,55 +42,43 @@ class EthLevelDB(object):
         self.db = ETH_DB(path)
         self.headBlockHeader = None
         self.headState = None
-        self.all_contracts = None
-        self.active_contracts = None
-        self.instance_lists = None
 
     def get_all_contracts(self):
         '''
         get all contracts
         '''
-        if not self.all_contracts:
-            self.all_contracts = []
-            self.active_contracts = []
-            self.instance_lists = []
-            state = self._get_head_state()
-            accounts = state.get_all_accounts()
+        state = self._get_head_state()
 
-            for a in accounts:
-                if a.code is not None:
-                    code = _encode_hex(a.code)
-                    md5 = hashlib.md5()
-                    md5.update(code.encode('UTF-8'))
-                    contract_hash = md5.digest()
-                    contract = ETHContract(code, name=contract_hash.hex())
-                    self.all_contracts.append(contract)
+        for a in state.get_all_accounts():
+            if a.code is not None:
+                code = _encode_hex(a.code)
+                md5 = hashlib.md5()
+                md5.update(code.encode('UTF-8'))
+                contract_hash = md5.digest()
+                contract = ETHContract(code, name=contract_hash.hex())
 
-                    if a.balance != 0:
-                        md5 = InstanceList()
-                        md5.add(_encode_hex(a.address), a.balance)
-                        self.instance_lists.append(md5)
-                        self.active_contracts.append(contract)
-
-        return self.all_contracts
+                if a.balance != 0:
+                    md5 = InstanceList()
+                    md5.add(_encode_hex(a.address), a.balance)
+                    yield contract, md5
+                else:
+                    yield contract, None
 
     def get_active_contracts(self):
         '''
         get all contracts with non-zero balance
         '''
-        if not self.active_contracts:
-            self.get_all_contracts() # optimized
-        return self.active_contracts
+        for contract, md5 in self.get_all_contracts():
+            if md5:
+                yield contract, md5
 
     def search(self, expression, callback_func):
         '''
         searches through non-zero balance contracts
         '''
-        contracts = self.get_active_contracts()
-        for i in range(0, len(contracts)):
-            if contracts[i].matches_expression(expression):
-                m = self.instance_lists[i]
-                callback_func(contracts[i].name, contracts[i], m.addresses, m.balances)
+        for contract, m in self.get_active_contracts():
+            if contract.matches_expression(expression):
+                callback_func(contract.name, contract, m.addresses, m.balances)
 
     def eth_getBlockHeaderByNumber(self, number):
         '''
@@ -167,7 +158,7 @@ class EthLevelDB(object):
                 hash = self.headBlockHeader.prevhash
                 num = self._get_block_number(hash)
                 self.headBlockHeader = self._get_block_header(hash, num)
-            
+
         return self.headBlockHeader
 
     def _get_block_number(self, hash):

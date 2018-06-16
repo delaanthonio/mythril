@@ -123,8 +123,6 @@ class State():
         '''
         iterates through trie to get all items
         '''
-        accounts = []
-        for addressHash, rlpdata in self.secureTrie.trie.to_dict().items():
+        for address_hash, rlpdata in self.secureTrie.trie.to_dict().items():
             if rlpdata != trie.BLANK_NODE:
-                accounts.append(rlp.decode(rlpdata, Account, db=self.db, address=addressHash))
-        return accounts
+                yield rlp.decode(rlpdata, Account, db=self.db, address=address_hash)

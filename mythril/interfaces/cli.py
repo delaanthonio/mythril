@@ -5,15 +5,16 @@
    http://www.github.com/ConsenSys/mythril
 """
 
-import logging
-import json
-import sys
 import argparse
-
-# logging.basicConfig(level=logging.DEBUG)
+import json
+import logging
+import sys
 
 from mythril.exceptions import CriticalError
 from mythril.mythril import Mythril
+
+# logging.basicConfig(level=logging.DEBUG)
+
 
 
 def exit_with_error(format, message):
@@ -49,7 +50,6 @@ def main():
     outputs.add_argument('--verbose-report', action='store_true', help='Include debugging information in report')
 
     database = parser.add_argument_group('local contracts database')
-    database.add_argument('--init-db', action='store_true', help='initialize the contract database')
     database.add_argument('-s', '--search', help='search the contract database', metavar='EXPRESSION')
 
     utilities = parser.add_argument_group('utilities')
@@ -87,7 +87,7 @@ def main():
 
     # Parse cmdline args
 
-    if not (args.search or args.init_db or args.hash or args.disassemble or args.graph or args.fire_lasers
+    if not (args.search or args.hash or args.disassemble or args.graph or args.fire_lasers
             or args.storage or args.truffle or args.statespace_json):
         parser.print_help()
         sys.exit()
@@ -106,8 +106,8 @@ def main():
 
     try:
         # the mythril object should be our main interface
-        #init_db = None, infura = None, rpc = None, rpctls = None, ipc = None,
-        #solc_args = None, dynld = None, max_recursion_depth = 12):
+        # infura = None, rpc = None, rpctls = None, ipc = None,
+        # solc_args = None, dynld = None, max_recursion_depth = 12):
 
 
         mythril = Mythril(solv=args.solv, dynld=args.dynld,
@@ -115,9 +115,12 @@ def main():
 
         if args.leveldb:
             # Open LevelDB if specified
-            mythril.set_db_leveldb(args.leveldb)
+            try:
+                mythril.set_db_leveldb(args.leveldb)
+            except OSError as e:
+                exit_with_error(args.outform, str(e))
 
-        elif (args.address or args.init_db) and not args.leveldb:
+        elif args.address:
             # Establish RPC/IPC connection if necessary
             if args.i:
                 mythril.set_db_rpc_infura()
@@ -139,11 +142,12 @@ def main():
 
         elif args.search:
             # Database search ops
+            if not mythril.ethDb:
+                try:
+                    mythril.set_db_leveldb()
+                except OSError as e:
+                    exit_with_error(args.outform, str(e))
             mythril.search_db(args.search)
-            sys.exit()
-
-        elif args.init_db:
-            mythril.init_db()
             sys.exit()
 
         # Load / compile input contracts
